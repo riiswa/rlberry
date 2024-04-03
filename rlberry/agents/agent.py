@@ -3,6 +3,8 @@ import dill
 import pickle
 import bz2
 import _pickle as cPickle
+
+import joblib as joblib
 import numpy as np
 from inspect import signature
 from pathlib import Path
@@ -488,7 +490,7 @@ class AgentWithSimplePolicy(Agent):
         """Returns an action, given an observation."""
         pass
 
-    def eval(self, eval_horizon=10**5, n_simulations=10, gamma=1.0, **kwargs):
+    def eval(self, eval_horizon=10**5, n_simulations=10, gamma=1.0, n_jobs=-1, backend="loky", **kwargs):
         """
         Monte-Carlo policy evaluation [1]_ of an agent to estimate the value at the initial state.
 
@@ -500,6 +502,10 @@ class AgentWithSimplePolicy(Agent):
             Number of Monte Carlo simulations.
         gamma : double, default: 1.0
             Discount factor.
+        n_jobs : int, optional, default: -1
+            Number of parallel jobs. If -1, all CPUs are used.
+        backend : str, optional, default: "loky"
+            Parallelization backend.
 
         Returns
         -------
@@ -511,21 +517,27 @@ class AgentWithSimplePolicy(Agent):
         .. [1] http://incompleteideas.net/book/first/ebook/node50.html
         """
         del kwargs  # unused
-        episode_rewards = np.zeros(n_simulations)
-        for sim in range(n_simulations):
+
+        def simulate_episode(_):
+            episode_reward = 0
             observation, info = self.eval_env.reset()
             tt = 0
             while tt < eval_horizon:
                 action = self.policy(observation)
-                observation, reward, terminated, truncated, info = self.eval_env.step(
-                    action
-                )
+                observation, reward, terminated, truncated, info = self.eval_env.step(action)
                 done = terminated or truncated
-                episode_rewards[sim] += reward * np.power(gamma, tt)
+                episode_reward += reward * np.power(gamma, tt)
                 tt += 1
                 if done:
                     break
-        return episode_rewards.mean()
+            return episode_reward
+
+        episode_rewards = joblib.Parallel(n_jobs=n_jobs, backend=backend)(
+            joblib.delayed(simulate_episode)(sim) for sim in range(n_simulations)
+        )
+        return np.mean(episode_rewards)
+
+
 
 
 class AgentTorch(Agent):
